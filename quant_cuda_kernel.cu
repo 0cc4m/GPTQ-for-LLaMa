@@ -32,7 +32,7 @@ Changes from the original HIPified version of the cuda kernel in order for it to
     
     Note on 3: I reverted this change, it appears to have no effect on my system in rocm.
       Build threw no errors and no issues running 4bit models with the atomicAdd function
-      as-is.
+      as-is.  --nerodia
 	
 
     
