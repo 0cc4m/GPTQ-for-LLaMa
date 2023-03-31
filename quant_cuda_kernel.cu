@@ -33,10 +33,9 @@ Changes from the original HIPified version of the cuda kernel in order for it to
     Note on 3: I reverted this change, it appears to have no effect on my system in rocm.
       Build threw no errors and no issues running 4bit models with the atomicAdd function
       as-is.  --nerodia
-	
 
+ 4. Reverted HIPification. It appears to have been unnecessary.
     
-Original lines have been commented. You can CTRL+F the original lines if you wish to see it.
 */
 
 // atomicAdd for double-precision floating-point numbers on hardware with
@@ -55,7 +54,7 @@ __device__ double atomicAdd(
     old = atomicCAS(
       address_as_ull,
       assumed,
-       __double_as_longlong(val + __longlong_as_double(assumed))
+      __double_as_longlong(val + __longlong_as_double(assumed))
     );
 
   // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
@@ -200,7 +199,7 @@ void vecquant2matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant2matmul_cuda", ([&] {
-     hipLaunchKernelGGL(( VecQuant2MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
+      VecQuant2MatMulKernel<<<blocks, threads>>>(
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -295,7 +294,7 @@ void vecquant3matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant3matmul_cuda", ([&] {
-     hipLaunchKernelGGL(( VecQuant3MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
+      VecQuant3MatMulKernel<<<blocks, threads>>>(
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -454,7 +453,7 @@ void vecquant4matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant4matmul_cuda", ([&] {
-     hipLaunchKernelGGL(( VecQuant4MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
+      VecQuant4MatMulKernel<<<blocks, threads>>>(
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -541,7 +540,7 @@ void vecquant8matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant8matmul_cuda", ([&] {
-     hipLaunchKernelGGL(( VecQuant8MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
+      VecQuant8MatMulKernel<<<blocks, threads>>>(
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -623,7 +622,7 @@ void vecquant2matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
- hipLaunchKernelGGL(( VecQuant2MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
+  VecQuant2MatMulKernelFaster<<<blocks, threads>>>(
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
@@ -727,7 +726,7 @@ void vecquant3matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
- hipLaunchKernelGGL(( VecQuant3MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
+  VecQuant3MatMulKernelFaster<<<blocks, threads>>>(
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
@@ -883,7 +882,7 @@ void vecquant4matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
- hipLaunchKernelGGL(( VecQuant4MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
+  VecQuant4MatMulKernelFaster<<<blocks, threads>>>(
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
