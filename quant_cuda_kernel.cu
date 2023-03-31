@@ -29,35 +29,41 @@ Changes from the original HIPified version of the cuda kernel in order for it to
  3. Commented the atomicAdd function implementation below as it would complain of redefinition
     in hipify. No idea if the function might be necessary to support older AMD GPUs like it
     does for older NVidia GPUs.
+    
+    Note on 3: I reverted this change, it appears to have no effect on my system in rocm.
+      Build threw no errors and no issues running 4bit models with the atomicAdd function
+      as-is.
+	
 
+    
 Original lines have been commented. You can CTRL+F the original lines if you wish to see it.
 */
 
 // atomicAdd for double-precision floating-point numbers on hardware with
 // compute capability < 6.0 from:
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomic-functions
-// #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
-// __device__ double atomicAdd(
-//     double* address,
-//     double val
-// ) {
-//   unsigned long long int* address_as_ull = (unsigned long long int*)address;
-//   unsigned long long int old = *address_as_ull, assumed;
-// 
-//   do {
-//     assumed = old;
-//     old = atomicCAS(
-//       address_as_ull,
-//       assumed,
-//       __double_as_longlong(val + __longlong_as_double(assumed))
-//     );
-// 
-//   // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
-//   } while (assumed != old);
-// 
-//   return __longlong_as_double(old);
-// }
-// #endif
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
+__device__ double atomicAdd(
+    double* address,
+    double val
+) {
+  unsigned long long int* address_as_ull = (unsigned long long int*)address;
+  unsigned long long int old = *address_as_ull, assumed;
+
+  do {
+    assumed = old;
+    old = atomicCAS(
+      address_as_ull,
+      assumed,
+       __double_as_longlong(val + __longlong_as_double(assumed))
+    );
+
+  // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
+  } while (assumed != old);
+
+  return __longlong_as_double(old);
+}
+#endif
 
 template <typename scalar_t>
 __global__ void VecQuant2MatMulKernel(
