@@ -1,8 +1,8 @@
 #include <torch/all.h>
 #include <torch/python.h>
-#include <hip/hip_runtime.h>
-
-#include <hip/hip_fp16.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 /*
 
