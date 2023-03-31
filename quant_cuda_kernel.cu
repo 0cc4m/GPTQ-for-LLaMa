@@ -1,60 +1,63 @@
 #include <torch/all.h>
 #include <torch/python.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+
+#include <hip/hip_fp16.h>
+
+/*
+
+Changes from the original HIPified version of the cuda kernel in order for it to compile.
+
+1. Replaced 3 instances of:
+	'res2 = {};'
+   To:
+   	'std::memset(&res2, 0, sizeof(half2));'
+   Reason:
+   	When hipifying this line it would give the error that the assignment
+	operator for half2 is ambiguous. Solution was to simply initialize its memory
+	as pure zeros.
+
+2. Changed 3 instances of this line:
+	res += __half2float(res2.x) + __half2float(res2.y);
+   To:
+	float2 res2float = __half22float2(res2);
+	res += res2float.x + res2float.y;
+   Reason:
+   	Conversion from unsigned short to __half seems to not work in HIP.
+	Workaround is to use __half22float2() instead then adding the float vector's
+	members into res like the original line intended.
+ 3. Commented the atomicAdd function implementation below as it would complain of redefinition
+    in hipify. No idea if the function might be necessary to support older AMD GPUs like it
+    does for older NVidia GPUs.
+
+Original lines have been commented. You can CTRL+F the original lines if you wish to see it.
+*/
 
 // atomicAdd for double-precision floating-point numbers on hardware with
 // compute capability < 6.0 from:
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomic-functions
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
-__device__ double atomicAdd(
-    double* address,
-    double val
-) {
-  unsigned long long int* address_as_ull = (unsigned long long int*)address;
-  unsigned long long int old = *address_as_ull, assumed;
-
-  do {
-    assumed = old;
-    old = atomicCAS(
-      address_as_ull,
-      assumed,
-      __double_as_longlong(val + __longlong_as_double(assumed))
-    );
-
-  // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
-  } while (assumed != old);
-
-  return __longlong_as_double(old);
-}
-#endif
-
-// atomicAdd for double-precision floating-point numbers on hardware with
-// compute capability < 6.0 from:
-// https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomic-functions
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
-__device__ double atomicAdd(
-    double* address,
-    double val
-) {
-  unsigned long long int* address_as_ull = (unsigned long long int*)address;
-  unsigned long long int old = *address_as_ull, assumed;
-
-  do {
-    assumed = old;
-    old = atomicCAS(
-      address_as_ull,
-      assumed,
-      __double_as_longlong(val + __longlong_as_double(assumed))
-    );
-
-  // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
-  } while (assumed != old);
-
-  return __longlong_as_double(old);
-}
-#endif
+// #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
+// __device__ double atomicAdd(
+//     double* address,
+//     double val
+// ) {
+//   unsigned long long int* address_as_ull = (unsigned long long int*)address;
+//   unsigned long long int old = *address_as_ull, assumed;
+// 
+//   do {
+//     assumed = old;
+//     old = atomicCAS(
+//       address_as_ull,
+//       assumed,
+//       __double_as_longlong(val + __longlong_as_double(assumed))
+//     );
+// 
+//   // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
+//   } while (assumed != old);
+// 
+//   return __longlong_as_double(old);
+// }
+// #endif
 
 template <typename scalar_t>
 __global__ void VecQuant2MatMulKernel(
@@ -191,7 +194,7 @@ void vecquant2matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant2matmul_cuda", ([&] {
-      VecQuant2MatMulKernel<<<blocks, threads>>>(
+     hipLaunchKernelGGL(( VecQuant2MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -286,7 +289,7 @@ void vecquant3matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant3matmul_cuda", ([&] {
-      VecQuant3MatMulKernel<<<blocks, threads>>>(
+     hipLaunchKernelGGL(( VecQuant3MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -445,7 +448,7 @@ void vecquant4matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant4matmul_cuda", ([&] {
-      VecQuant4MatMulKernel<<<blocks, threads>>>(
+     hipLaunchKernelGGL(( VecQuant4MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -532,7 +535,7 @@ void vecquant8matmul_cuda(
 
   AT_DISPATCH_FLOATING_TYPES(
     vec.type(), "vecquant8matmul_cuda", ([&] {
-      VecQuant8MatMulKernel<<<blocks, threads>>>(
+     hipLaunchKernelGGL(( VecQuant8MatMulKernel), dim3(blocks), dim3(threads), 0, 0, 
         vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
         scales.data<scalar_t>(), zeros.data<int>(),
         batch, vec_height, height, width, zero_width, groupsize
@@ -614,7 +617,7 @@ void vecquant2matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
-  VecQuant2MatMulKernelFaster<<<blocks, threads>>>(
+ hipLaunchKernelGGL(( VecQuant2MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
@@ -675,7 +678,8 @@ __global__ void VecQuant2MatMulKernelFaster(
     half2 scale = __float2half2_rn(scale_f);
     half2 zero = __float2half2_rn(-(scale_f * (((as_unsigned(zeros[g * zero_width + z_w]) >> z_mod) & 0x3) + 1)));
 	
-    res2 = {};
+    //res2 = {};
+    std::memset(&res2, 0, sizeof(half2));
     tmp = as_unsigned(mat[i]);
     res2 = __hfma2(__hfma2(deq2[(tmp >>  0) & 0xf][off], scale, zero), blockvec[k + 0], res2);
     res2 = __hfma2(__hfma2(deq2[(tmp >>  4) & 0xf][off], scale, zero), blockvec[k + 1], res2);
@@ -687,7 +691,10 @@ __global__ void VecQuant2MatMulKernelFaster(
     res2 = __hfma2(__hfma2(deq2[(tmp >> 28) & 0xf][off], scale, zero), blockvec[k + 7], res2);
 	i += width;
     k += 8;
-    res += __half2float(res2.x) + __half2float(res2.y);
+    //res += __half2float(res2.x) + __half2float(res2.y);
+    
+    float2 res2float = __half22float2(res2);
+    res += res2float.x + res2float.y;
   }
 
   atomicAdd(&mul[b * width + w], res);
@@ -714,7 +721,7 @@ void vecquant3matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
-  VecQuant3MatMulKernelFaster<<<blocks, threads>>>(
+ hipLaunchKernelGGL(( VecQuant3MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
@@ -809,7 +816,8 @@ __global__ void VecQuant3MatMulKernelFaster(
       zero = __float2half2_rn(-(scale_f * (((as_unsigned(zeros[g * zero_width + z_w]) >> z_bit) & 0x7) + 1)));
     }
 	
-    res2 = {};
+    //res2 = {};
+    std::memset(&res2, 0, sizeof(half2));
     tmp1 = as_unsigned(mat[i]);
     res2 = __hfma2(__hfma2(deq2[(tmp1 >>  0) & 0x3f][off], scale, zero), blockvec[k + 0], res2);
     res2 = __hfma2(__hfma2(deq2[(tmp1 >>  6) & 0x3f][off], scale, zero), blockvec[k + 1], res2);
@@ -839,7 +847,10 @@ __global__ void VecQuant3MatMulKernelFaster(
     res2 = __hfma2(__hfma2(deq2[(tmp1 >> 24) & 0x3f][off], scale, zero), blockvec[k + 4], res2);
     i += width;
     k += 5;
-    res += __half2float(res2.x) + __half2float(res2.y);
+    //res += __half2float(res2.x) + __half2float(res2.y);
+    
+    float2 res2float = __half22float2(res2); 
+    res += res2float.x + res2float.y;
   }
 
   atomicAdd(&mul[b * width + w], res);
@@ -866,7 +877,7 @@ void vecquant4matmul_faster_cuda(
   );
   dim3 threads(BLOCKWIDTH);
 
-  VecQuant4MatMulKernelFaster<<<blocks, threads>>>(
+ hipLaunchKernelGGL(( VecQuant4MatMulKernelFaster), dim3(blocks), dim3(threads), 0, 0, 
     (half2*) vec.data_ptr(),
     mat.data_ptr<int>(),
     mul.data_ptr<float>(),
@@ -927,7 +938,8 @@ __global__ void VecQuant4MatMulKernelFaster(
     half2 scale = __float2half2_rn(scale_f);
     half2 zero = __float2half2_rn(-(scale_f * (((as_unsigned(zeros[g * zero_width + z_w]) >> z_mod) & 0xF) + 1)));
 	
-    res2 = {};
+    //res2 = {};
+    std::memset(&res2, 0, sizeof(half2));
     tmp = as_unsigned(mat[i]);
     res2 = __hfma2(__hfma2(deq2[(tmp >>  0) & 0xff][off], scale, zero), blockvec[k + 0], res2);
     res2 = __hfma2(__hfma2(deq2[(tmp >>  8) & 0xff][off], scale, zero), blockvec[k + 1], res2);
@@ -935,7 +947,10 @@ __global__ void VecQuant4MatMulKernelFaster(
     res2 = __hfma2(__hfma2(deq2[(tmp >> 24) & 0xff][off], scale, zero), blockvec[k + 3], res2);
 	i += width;
     k += 4;
-    res += __half2float(res2.x) + __half2float(res2.y);
+    //res += __half2float(res2.x) + __half2float(res2.y);
+    
+    float2 res2float = __half22float2(res2);
+    res += res2float.x + res2float.y;
   }
 
   atomicAdd(&mul[b * width + w], res);
