@@ -104,10 +104,9 @@ def llama_sequential(model, dataloader, dev):
                 h.remove()
 
             for name in subset:
-                print(i, name)
-                print('Quantizing ...')
-                scale,zero = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order)
-                quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer,scale,zero)
+                print(f'Quantizing {name} in layer {i+1}/{len(layers)}...')
+                scale,zero,g_idx = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order)
+                quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer.cpu(),scale.cpu(),zero.cpu(),g_idx.cpu())
                 gptq[name].free()
                 
         for j in range(args.nsamples):
@@ -180,7 +179,7 @@ def llama_eval(model, testenc, dev):
             for name in subset:
                 quantizer = Quantizer()
                 quantizer.configure(
-                    args.wbits, perchannel=True, sym=False, mse=False
+                    args.wbits, perchannel=True, sym=args.sym, mse=False
                 )
                 W = subset[name].weight.data
                 quantizer.find_params(W, weight=True)
@@ -228,13 +227,12 @@ def llama_pack(model, quantizers, wbits, groupsize):
     print('Packing ...')
     for name in qlayers:
         print(name)
-        quantizers[name],scale,zero = quantizers[name]
-        quantizers[name],scale,zero = quantizers[name].cpu(),scale.cpu(),zero.cpu()
-        qlayers[name].pack(layers[name], scale, zero)
+        quantizers[name],scale,zero,g_idx = quantizers[name]
+        qlayers[name].pack(layers[name], scale, zero, g_idx)
     print('Done.')
     return model
 
-def load_quant(model, checkpoint, wbits, groupsize=-1,faster_kernel=False):
+def load_quant(model, checkpoint, wbits, groupsize=-1):
     from transformers import LlamaConfig, LlamaForCausalLM 
     config = LlamaConfig.from_pretrained(model)
     def noop(*args, **kwargs):
@@ -253,16 +251,16 @@ def load_quant(model, checkpoint, wbits, groupsize=-1,faster_kernel=False):
     for name in ['lm_head']:
         if name in layers:
             del layers[name]
-    make_quant(model, layers, wbits, groupsize, faster=faster_kernel)
+    make_quant(model, layers, wbits, groupsize)
 
     del layers
     
     print('Loading model ...')
     if checkpoint.endswith('.safetensors'):
         from safetensors.torch import load_file as safe_load
-        model.load_state_dict(safe_load(checkpoint))
+        model.load_state_dict(safe_load(checkpoint), strict = False)
     else:
-        model.load_state_dict(torch.load(checkpoint))
+        model.load_state_dict(torch.load(checkpoint), strict = False)
     model.seqlen = 2048
     print('Done.')
 
@@ -433,17 +431,14 @@ if __name__ == '__main__':
         '--new-eval', action='store_true',
         help='Whether to use the new PTB and C4 eval'
     )
-    parser.add_argument(
-        '--faster-kernel', action='store_true',
-        help='Whether to use the new faster kernel for benchmarking.'
-    )
+    
     args = parser.parse_args()
 
     if type(args.load) is not str:
         args.load = args.load.as_posix()
     
     if args.load:
-        model = load_quant(args.model, args.load, args.wbits, args.groupsize, args.faster_kernel)
+        model = load_quant(args.model, args.load, args.wbits, args.groupsize)
     else:
         model = get_llama(args.model)
         model.eval()
@@ -456,7 +451,20 @@ if __name__ == '__main__':
         tick = time.time()
         quantizers = llama_sequential(model, dataloader, DEV)
         print(time.time() - tick)
-    
+        
+    if args.benchmark:
+        gpus = [torch.device('cuda:%d' % i) for i in range(torch.cuda.device_count())]
+        if len(gpus) > 1:
+            llama_multigpu(model, gpus)
+        else:
+            model = model.to(DEV)
+        if args.benchmark:
+            input_ids = next(iter(dataloader))[0][:, :args.benchmark]
+            benchmark(model, input_ids, check=args.check)
+            
+    if args.load:
+        exit()
+        
     if args.eval:
         datasets = ['wikitext2', 'ptb', 'c4'] 
         if args.new_eval:
@@ -476,15 +484,3 @@ if __name__ == '__main__':
         llama_pack(model, quantizers, args.wbits, args.groupsize)
         from safetensors.torch import save_file as safe_save
         safe_save(model.state_dict(), args.save_safetensors)
-        
-    if args.benchmark:
-        gpus = [torch.device('cuda:%d' % i) for i in range(torch.cuda.device_count())]
-        if len(gpus) > 1:
-            llama_multigpu(model, gpus)
-        else:
-            model = model.to(DEV)
-        if args.benchmark:
-            input_ids = next(iter(dataloader))[0][:, :args.benchmark]
-            benchmark(model, input_ids, check=args.check)
-    if args.load:
-        exit()
