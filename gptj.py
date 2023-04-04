@@ -117,17 +117,17 @@ def gptj_sequential(model, dataloader, dev):
                 h.remove()
 
             for name in subset:
-                print(i, name)
-                print("Quantizing ...")
-                scale, zero = gptq[name].fasterquant(
+                print(f'Quantizing {name} in layer {i+1}/{len(layers)}...')
+                scale, zero, g_idx = gptq[name].fasterquant(
                     percdamp=args.percdamp,
                     groupsize=args.groupsize,
                     actorder=args.act_order,
                 )
                 quantizers["transformer.h.%d.%s" % (i, name)] = (
-                    gptq[name].quantizer,
-                    scale,
-                    zero,
+                    gptq[name].quantizer.cpu(),
+                    scale.cpu(),
+                    zero.cpu(),
+                    g_idx.cpu(),
                 )
                 gptq[name].free()
 
@@ -207,7 +207,7 @@ def gptj_eval(model, testenc, dev):
             subset = find_layers(layer)
             for name in subset:
                 quantizer = Quantizer()
-                quantizer.configure(args.wbits, perchannel=True, sym=False, mse=False)
+                quantizer.configure(args.wbits, perchannel=True, sym=args.sym, mse=False)
                 W = subset[name].weight.data
                 quantizer.find_params(W, weight=True)
                 subset[name].weight.data = quantize(
@@ -259,14 +259,13 @@ def gptj_pack(model, quantizers, wbits, groupsize):
     print("Packing ...")
     for name in qlayers:
         print(name)
-        quantizers[name], scale, zero = quantizers[name]
-        quantizers[name], scale, zero = quantizers[name].cpu(), scale.cpu(), zero.cpu()
-        qlayers[name].pack(layers[name], scale, zero)
+        quantizers[name],scale,zero,g_idx = quantizers[name]
+        qlayers[name].pack(layers[name], scale, zero, g_idx)
     print("Done.")
     return model
 
 
-def load_quant(model, checkpoint, wbits, groupsize=-1, faster_kernel=False):
+def load_quant(model, checkpoint, wbits, groupsize=-1):
     from transformers import GPTJConfig, GPTJForCausalLM
 
     config = GPTJConfig.from_pretrained(model)
@@ -288,7 +287,7 @@ def load_quant(model, checkpoint, wbits, groupsize=-1, faster_kernel=False):
     for name in ["lm_head"]:
         if name in layers:
             del layers[name]
-    make_quant(model, layers, wbits, groupsize, faster=faster_kernel)
+    make_quant(model, layers, wbits, groupsize)
 
     del layers
 
@@ -495,7 +494,7 @@ if __name__ == "__main__":
 
     if args.load:
         model = load_quant(
-            args.model, args.load, args.wbits, args.groupsize, args.faster_kernel
+            args.model, args.load, args.wbits, args.groupsize
         )
     else:
         model = get_gptj(args.model)
@@ -514,6 +513,16 @@ if __name__ == "__main__":
         tick = time.time()
         quantizers = gptj_sequential(model, dataloader, DEV)
         print(time.time() - tick)
+
+    if args.benchmark:
+        gpus = [torch.device("cuda:%d" % i) for i in range(torch.cuda.device_count())]
+        if len(gpus) > 1:
+            gptj_multigpu(model, gpus)
+        else:
+            model = model.to(DEV)
+        if args.benchmark:
+            input_ids = next(iter(dataloader))[0][:, : args.benchmark]
+            benchmark(model, input_ids, check=args.check)
 
     if args.eval:
         datasets = ["wikitext2", "ptb", "c4"]
@@ -539,13 +548,3 @@ if __name__ == "__main__":
         from safetensors.torch import save_file as safe_save
 
         safe_save(model.state_dict(), args.save_safetensors)
-
-    if args.benchmark:
-        gpus = [torch.device("cuda:%d" % i) for i in range(torch.cuda.device_count())]
-        if len(gpus) > 1:
-            gptj_multigpu(model, gpus)
-        else:
-            model = model.to(DEV)
-        if args.benchmark:
-            input_ids = next(iter(dataloader))[0][:, : args.benchmark]
-            benchmark(model, input_ids, check=args.check)
