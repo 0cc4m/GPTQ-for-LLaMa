@@ -4,8 +4,6 @@ import torch.nn as nn
 from torch.cuda.amp import custom_bwd, custom_fwd
 import math
 
-import quant_cuda
-
 def quantize(x, scale, zero, maxq):
     if maxq < 0:
         return (x > scale / 2).float() * scale + (x < zero / 2).float() * zero
