@@ -1,12 +1,15 @@
+import os
 import torch
 import torch.nn as nn
 
 from . import quant_v1
 from . import quant_v2
+from . import quant_v3
 
-GPTQVERSION = 1
 
-
+GPTQVERSION = int(os.environ.get("GPTQVERSION", 1))
+if GPTQVERSION < 0 or GPTQVERSION > 2:
+    raise NotImplementedError(f"Unsupported gptq version: {GPTQVERSION}")
 DEV = torch.device('cuda:0')
 
 
@@ -26,9 +29,14 @@ def set_gptq_version(version):
     GPTQVERSION = version
 
 
+def get_gptq_version():
+    return GPTQVERSION
+
+
 def make_quant(*args, **kwargs):
     if GPTQVERSION == 0:
         return quant_v1.make_quant(*args, **kwargs)
-
     if GPTQVERSION == 1:
         return quant_v2.make_quant(*args, **kwargs)
+    if GPTQVERSION == 2:
+        return quant_v3.make_quant(*args, **kwargs)

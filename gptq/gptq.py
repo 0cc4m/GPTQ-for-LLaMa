@@ -5,7 +5,11 @@ import torch
 import torch.nn as nn
 import transformers
 
-from .quant_v2 import *
+from .modelutils import GPTQVERSION
+if GPTQVERSION == 1:
+    from .quant_v2 import quantize
+elif GPTQVERSION == 2:
+    from .quant_v3 import quantize
 
 
 DEBUG = False 
@@ -93,6 +97,8 @@ class GPTQ:
         H = torch.linalg.cholesky(H, upper=True)
         Hinv = H
         
+        if GPTQVERSION == 2:
+            g_idx = []
         scale = []
         zero = []
         now_idx = 1
@@ -144,7 +150,11 @@ class GPTQ:
         torch.cuda.synchronize()
         print('time %.2f' % (time.time() - tick))
         print('error', torch.sum(Losses).item())
-        
+
+        if GPTQVERSION == 2:
+            groupsize = groupsize if groupsize != -1 else self.columns
+            g_idx = [i // groupsize  for i in range(self.columns)]
+            g_idx = torch.tensor(g_idx, dtype=torch.int32, device=Q.device)
         if actorder:
             invperm = torch.argsort(perm)
             Q = Q[:, invperm]
@@ -160,7 +170,12 @@ class GPTQ:
             zero.append(self.quantizer.zero)
         scale = torch.cat(scale,dim=1)
         zero = torch.cat(zero,dim=1)
-        return scale,zero
+        if GPTQVERSION == 1:
+            return scale, zero
+        elif GPTQVERSION == 2:
+            return scale,zero,g_idx
+        else:
+            raise NotImplementedError("Unsupported GPTQVERSION")
             
     def free(self):
         if DEBUG:

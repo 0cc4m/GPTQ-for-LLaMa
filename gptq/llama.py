@@ -5,8 +5,13 @@ import torch.nn as nn
 
 import transformers
 
-from .modelutils import find_layers, make_quant
-from .quant_v2 import quantize, Quantizer, QuantLinear
+from .gptq import GPTQ
+from .modelutils import DEV, find_layers, GPTQVERSION, make_quant
+if GPTQVERSION == 1:
+    from .quant_v2 import quantize, Quantizer, QuantLinear
+elif GPTQVERSION == 2:
+    from .quant_v3 import quantize, Quantizer, QuantLinear
+from .fused_attn import make_quant_attn
 
 
 def get_llama(model):
@@ -105,10 +110,15 @@ def llama_sequential(model, dataloader, dev):
                 h.remove()
 
             for name in subset:
-                print(i, name)
-                print('Quantizing ...')
-                scale,zero = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order)
-                quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer,scale,zero)
+                print(f'Quantizing {name} in layer {i+1}/{len(layers)}...')
+                if GPTQVERSION == 1:
+                    scale,zero = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order)
+                    quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer.cpu(),scale.cpu(),zero.cpu())
+                elif GPTQVERSION == 2:
+                    scale,zero,g_idx = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order)
+                    quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer.cpu(),scale.cpu(),zero.cpu(),g_idx.cpu())
+                else:
+                    raise NotImplementedError("Unsupported GPTQVERSION")
                 gptq[name].free()
                 
         for j in range(args.nsamples):
@@ -181,7 +191,7 @@ def llama_eval(model, testenc, dev):
             for name in subset:
                 quantizer = Quantizer()
                 quantizer.configure(
-                    args.wbits, perchannel=True, sym=False, mse=False
+                    args.wbits, perchannel=True, sym=args.sym, mse=False
                 )
                 W = subset[name].weight.data
                 quantizer.find_params(W, weight=True)
@@ -229,9 +239,14 @@ def llama_pack(model, quantizers, wbits, groupsize):
     print('Packing ...')
     for name in qlayers:
         print(name)
-        quantizers[name],scale,zero = quantizers[name]
-        quantizers[name],scale,zero = quantizers[name].cpu(),scale.cpu(),zero.cpu()
-        qlayers[name].pack(layers[name], scale, zero)
+        if GPTQVERSION == 1:
+            quantizers[name],scale,zero = quantizers[name]
+            qlayers[name].pack(layers[name], scale, zero)
+        elif GPTQVERSION == 2:
+            quantizers[name],scale,zero,g_idx = quantizers[name]
+            qlayers[name].pack(layers[name], scale, zero, g_idx)
+        else:
+            raise NotImplementedError("Unsupported GPTQVERSION")
     print('Done.')
     return model
 
@@ -264,6 +279,9 @@ def load_quant(model, checkpoint, wbits, groupsize=-1):
         model.load_state_dict(safe_load(checkpoint))
     else:
         model.load_state_dict(torch.load(checkpoint))
+
+    if GPTQVERSION > 1:
+        make_quant_attn(model)
     model.seqlen = 2048
     print('Done.')
 
@@ -354,7 +372,7 @@ def benchmark(model, input_ids, check=False):
 
 if __name__ == '__main__':
     import argparse
-    from datautils import *
+    from .datautils import *
 
     parser = argparse.ArgumentParser()
 
@@ -453,6 +471,19 @@ if __name__ == '__main__':
         tick = time.time()
         quantizers = llama_sequential(model, dataloader, DEV)
         print(time.time() - tick)
+
+    if args.benchmark:
+        gpus = [torch.device('cuda:%d' % i) for i in range(torch.cuda.device_count())]
+        if len(gpus) > 1:
+            llama_multigpu(model, gpus)
+        else:
+            model = model.to(DEV)
+        if args.benchmark:
+            input_ids = next(iter(dataloader))[0][:, :args.benchmark]
+            benchmark(model, input_ids, check=args.check)
+
+    if args.load:
+        exit()
     
     if args.eval:
         datasets = ['wikitext2', 'ptb', 'c4'] 
@@ -472,16 +503,6 @@ if __name__ == '__main__':
     if args.save_safetensors:
         llama_pack(model, quantizers, args.wbits, args.groupsize)
         from safetensors.torch import save_file as safe_save
-        safe_save(model.state_dict(), args.save_safetensors)
-        
-    if args.benchmark:
-        gpus = [torch.device('cuda:%d' % i) for i in range(torch.cuda.device_count())]
-        if len(gpus) > 1:
-            llama_multigpu(model, gpus)
-        else:
-            model = model.to(DEV)
-        if args.benchmark:
-            input_ids = next(iter(dataloader))[0][:, :args.benchmark]
-            benchmark(model, input_ids, check=args.check)
-    if args.load:
-        exit()
+        state_dict = model.state_dict()
+        state_dict = {k: v.clone().contiguous() for k, v in state_dict.items()}
+        safe_save(state_dict, args.save_safetensors)
