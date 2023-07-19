@@ -377,7 +377,7 @@ def benchmark(model, input_ids, check=False):
 
 if __name__ == '__main__':
     import argparse
-    from datautils import *
+    .from datautils import *
 
     parser = argparse.ArgumentParser()
 
