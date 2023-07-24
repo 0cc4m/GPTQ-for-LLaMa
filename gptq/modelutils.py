@@ -14,7 +14,7 @@ DEV = torch.device('cuda:0')
 
 
 def find_layers(module, layers=[nn.Conv2d, nn.Linear], name=''):
-    if type(module) in layers:
+    if any([isinstance(module, t) for t in layers]):
         return {name: module}
     res = {}
     for name1, child in module.named_children():
