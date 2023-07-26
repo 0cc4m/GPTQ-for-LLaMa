@@ -77,7 +77,7 @@ Depending on the GPUs/drivers, there may be a difference in performance, which d
 According to [GPTQ paper](https://arxiv.org/abs/2210.17323), As the size of the model increases, the difference in performance between FP16 and GPTQ decreases.
 
 ## Installation
-```pip install git+https://github.com/0cc4m/GPTQ-for-LLaMa@c884b421a233f9603d8224c9b22c2d83dd2c1fc4```
+```pip install git+https://github.com/0cc4m/GPTQ-for-LLaMa@fb3de0685fb4bfc58cc3eb2c8958192c60d39fe4```
 
 old instructions:
 
